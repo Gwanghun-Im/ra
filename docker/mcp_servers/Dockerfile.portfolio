@@ -1,0 +1,21 @@
+FROM python:3.12-slim
+
+WORKDIR /app
+
+# Install dependencies
+RUN pip install --no-cache-dir \
+    fastmcp>=2.11.0 \
+    redis>=5.0.0 \
+    httpx \
+    python-dotenv \
+    fastapi>=0.115.0 \
+    uvicorn>=0.30.0
+
+# Copy server file
+COPY src/mcp_custom/servers/portfolio_server.py /app/server.py
+
+# Expose port
+EXPOSE 8002
+
+# Run server
+CMD ["python", "server.py"]

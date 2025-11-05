@@ -1,0 +1,29 @@
+a2a:
+  agents:
+    robo_advisor:
+      name: "Robo Advisor Agent"
+      description: "Investment advisory and portfolio analysis agent"
+      version: "1.0.0"
+      url: "http://localhost:8100"
+      card_url: "http://localhost:8100/.well-known/agent.json"
+      capabilities:
+        - portfolio_analysis
+        - investment_recommendation
+        - risk_assessment
+        - market_research
+      modalities:
+        - text
+        - structured_data
+      authentication:
+        type: "none"  # For development; use OAuth2 in production
+      
+  communication:
+    timeout: 60
+    retry_attempts: 3
+    streaming_enabled: true
+    push_notifications: false
+
+  task_management:
+    max_concurrent_tasks: 10
+    task_timeout: 300
+    enable_async: true

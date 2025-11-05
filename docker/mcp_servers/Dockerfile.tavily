@@ -1,0 +1,22 @@
+FROM python:3.12-slim
+
+WORKDIR /app
+
+# Install dependencies
+RUN pip install --no-cache-dir \
+    fastmcp>=2.11.0 \
+    redis>=5.0.0 \
+    httpx \
+    python-dotenv \
+    tavily>=1.1.0 \
+    fastapi>=0.115.0 \
+    uvicorn>=0.30.0
+
+# Copy server file
+COPY src/mcp_custom/servers/tavily_server.py /app/server.py
+
+# Expose port
+EXPOSE 8003
+
+# Run server
+CMD ["python", "server.py"]
