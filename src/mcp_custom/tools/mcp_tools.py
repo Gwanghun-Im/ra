@@ -2,6 +2,7 @@
 
 import os
 import asyncio
+import json
 from typing import Dict, Any, List, Literal
 from langchain_core.tools import tool
 import httpx
@@ -9,8 +10,8 @@ import httpx
 # MCP Server URLs from environment variables or defaults
 MARKET_DATA_URL = os.getenv("MCP_MARKET_DATA_URL", "http://localhost:8001")
 PORTFOLIO_URL = os.getenv("MCP_PORTFOLIO_URL", "http://localhost:8002")
-TAVILY_URL = os.getenv("TAVILY_URL", "http://localhost:8003")
-RAG_URL = os.getenv("RAG_URL", "http://localhost:8004")
+TAVILY_URL = os.getenv("MCP_TAVILY_URL", "http://localhost:8003")
+RAG_URL = os.getenv("MCP_RAG_URL", "http://localhost:8004")
 
 
 async def call_mcp_tool(base_url: str, tool_name: str, arguments: Dict[str, Any]) -> Any:
@@ -56,7 +57,6 @@ async def get_stock_price_tool(symbol: str) -> Dict[str, Any]:
     result = await call_mcp_tool(MARKET_DATA_URL, "get_stock_price", {"symbol": symbol})
     # Parse JSON string if needed
     if isinstance(result, str):
-        import json
 
         return json.loads(result)
     return result
@@ -81,7 +81,6 @@ async def get_market_news_tool(symbol: str | None = None, limit: int = 5) -> Lis
     result = await call_mcp_tool(MARKET_DATA_URL, "get_market_news", args)
     # Parse JSON string if needed
     if isinstance(result, str):
-        import json
 
         return json.loads(result)
     return result
@@ -101,7 +100,6 @@ async def get_company_financials_tool(symbol: str) -> Dict[str, Any]:
     result = await call_mcp_tool(MARKET_DATA_URL, "get_company_financials", {"symbol": symbol})
     # Parse JSON string if needed
     if isinstance(result, str):
-        import json
 
         return json.loads(result)
     return result
@@ -121,7 +119,6 @@ async def get_portfolio_tool(user_id: str = "default") -> Dict[str, Any]:
     result = await call_mcp_tool(PORTFOLIO_URL, "get_portfolio", {"user_id": user_id})
     # Parse JSON string if needed
     if isinstance(result, str):
-        import json
 
         return json.loads(result)
     return result
@@ -150,7 +147,6 @@ async def add_position_tool(
     )
     # Parse JSON string if needed
     if isinstance(result, str):
-        import json
 
         return json.loads(result)
     return result
@@ -179,7 +175,6 @@ async def remove_position_tool(
     )
     # Parse JSON string if needed
     if isinstance(result, str):
-        import json
 
         return json.loads(result)
     return result
@@ -202,7 +197,6 @@ async def calculate_returns_tool(user_id: str, current_prices: Dict[str, float])
     )
     # Parse JSON string if needed
     if isinstance(result, str):
-        import json
 
         return json.loads(result)
     return result
@@ -222,7 +216,6 @@ async def analyze_risk_tool(user_id: str) -> Dict[str, Any]:
     result = await call_mcp_tool(PORTFOLIO_URL, "analyze_risk", {"user_id": user_id})
     # Parse JSON string if needed
     if isinstance(result, str):
-        import json
 
         return json.loads(result)
     return result
@@ -300,7 +293,6 @@ async def search_tavily_tool(
     )
     # Parse JSON string if needed
     if isinstance(result, str):
-        import json
 
         return json.loads(result)
     return result
@@ -329,7 +321,6 @@ async def add_documents_to_rag(
         RAG_URL, "add_documents", {"documents": documents, "metadata_list": metadata_list}
     )
     if isinstance(result, str):
-        import json
 
         return json.loads(result)
     return result
@@ -356,7 +347,6 @@ async def search_knowledge_base(
         {"query": query, "k": k, "include_distances": include_distances},
     )
     if isinstance(result, str):
-        import json
 
         return json.loads(result)
     return result
@@ -386,7 +376,6 @@ async def rag_query_tool(
         {"query": query, "k": k, "context_template": context_template},
     )
     if isinstance(result, str):
-        import json
 
         return json.loads(result)
     return result
@@ -402,7 +391,6 @@ async def get_rag_stats_tool() -> Dict[str, Any]:
     """
     result = await call_mcp_tool(RAG_URL, "get_rag_stats", {})
     if isinstance(result, str):
-        import json
 
         return json.loads(result)
     return result

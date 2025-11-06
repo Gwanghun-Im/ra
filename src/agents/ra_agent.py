@@ -1,24 +1,21 @@
 """Robo Advisor Agent Implementation"""
 
 import os
+import logging
 from typing import Any, Dict, List, TypedDict
 from langchain_openai import ChatOpenAI
-from langchain_core.messages import HumanMessage, SystemMessage, AIMessage, ToolMessage
+from langchain_core.messages import HumanMessage, SystemMessage, ToolMessage
 from langgraph.graph import StateGraph, END
-import logging
 
-from src.mcp_custom.tools.mcp_tools import (
+from mcp_custom.tools.mcp_tools import (
     get_stock_price_tool,
-    get_market_news_tool,
     get_company_financials_tool,
     get_portfolio_tool,
     calculate_returns_tool,
     analyze_risk_tool,
     search_tavily_tool,
-    search_knowledge_base,
-    rag_query_tool,
-    get_rag_stats_tool,
 )
+from a2a.client import A2AClient
 
 logger = logging.getLogger(__name__)
 
@@ -40,21 +37,20 @@ class RoboAdvisorAgent:
     def __init__(self):
         """Initialize the Robo Advisor Agent"""
         self.llm = ChatOpenAI(
-            model="gpt-4o-mini", temperature=0.7, api_key=os.getenv("OPENAI_API_KEY")
+            model="gpt-4o-mini", temperature=0, api_key=os.getenv("OPENAI_API_KEY")
         )
 
-        # Define available tools
+        # Initialize A2A client for communicating with RAG Agent
+        self.a2a_client = A2AClient()
+
+        # Define available tools (RAG tools removed, now using A2A)
         self.tools = [
             get_stock_price_tool,
-            # get_market_news_tool,
             get_company_financials_tool,
             get_portfolio_tool,
             calculate_returns_tool,
             analyze_risk_tool,
             search_tavily_tool,
-            search_knowledge_base,
-            rag_query_tool,
-            get_rag_stats_tool,
         ]
 
         # Bind tools to LLM
@@ -63,7 +59,7 @@ class RoboAdvisorAgent:
         # Build the graph
         self.graph = self._build_graph()
 
-        logger.info("Robo Advisor Agent initialized")
+        logger.info("Robo Advisor Agent initialized with A2A RAG integration")
 
     def _build_graph(self) -> StateGraph:
         """Build LangGraph workflow"""
@@ -109,16 +105,18 @@ Always:
 5. Explain your reasoning clearly
 
 Available tools:
+- search_tavily: Get market news and sentiment
 - get_stock_price: Get current stock prices
 - get_company_financials: Get company financial metrics
 - get_portfolio: Retrieve user portfolio
 - calculate_returns: Calculate portfolio performance
 - analyze_risk: Analyze portfolio risk metrics
-- search_tavily: Get market news and sentiment
-- search_knowledge_base: Search RAG knowledge base for relevant documents
-- rag_query_tool: Retrieve relevant context from knowledge base for answering queries
-- get_rag_stats_tool: Get statistics about the knowledge base
-- [deprecated]get_market_news: Get market news and sentiment
+
+For knowledge base queries, research questions, or information retrieval:
+- Request information from the RAG Agent via A2A protocol
+- The RAG Agent specializes in searching and retrieving information from the knowledge base
+- When you need to look up investment concepts, research topics, or historical data,
+  indicate that you need RAG information and it will be fetched via A2A communication
 """
             )
             messages = [system_msg] + messages
@@ -129,16 +127,62 @@ Available tools:
         # Update state
         return {**state, "messages": messages + [response]}
 
+    async def _call_rag_agent(self, query: str) -> str:
+        """
+        Call RAG Agent via A2A protocol
+
+        Args:
+            query: RAG query to send
+
+        Returns:
+            RAG Agent response
+        """
+        try:
+            logger.info(f"Calling RAG Agent via A2A with query: {query}")
+            result = await self.a2a_client.send_task("rag_agent", query)
+
+            # Extract response content
+            message = result.get("message", {})
+            content = message.get("content", "No response from RAG Agent")
+
+            logger.info("Successfully received response from RAG Agent")
+            return content
+
+        except Exception as e:
+            logger.error(f"Error calling RAG Agent via A2A: {e}")
+            return f"Error retrieving information from knowledge base: {str(e)}"
+
     async def _tools_node(self, state: AgentState) -> AgentState:
         """Execute tool calls using async HTTP calls to Docker MCP servers"""
         messages = state["messages"]
         last_message = messages[-1]
 
+        # Check if the message contains RAG-related keywords
+        content = last_message.content.lower() if hasattr(last_message, "content") else ""
+        rag_keywords = [
+            "search knowledge",
+            "look up",
+            "find information",
+            "research",
+            "what is",
+            "explain",
+            "define",
+            "tell me about",
+        ]
+
+        needs_rag = any(keyword in content for keyword in rag_keywords)
+
+        tool_messages = []
+
+        # If RAG is needed, call RAG Agent via A2A
+        if needs_rag:
+            rag_response = await self._call_rag_agent(content)
+            tool_messages.append(HumanMessage(content=f"[RAG Agent Response]: {rag_response}"))
+
         # Create a mapping of tool names to tool functions
         tools_by_name = {tool.name: tool for tool in self.tools}
 
         # Execute each tool call
-        tool_messages = []
         if hasattr(last_message, "tool_calls") and last_message.tool_calls:
             for tool_call in last_message.tool_calls:
                 tool_name = tool_call["name"]

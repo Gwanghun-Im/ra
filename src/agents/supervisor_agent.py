@@ -8,7 +8,8 @@ from langgraph.graph import StateGraph, END
 import logging
 
 from a2a.client import A2AClient
-from src.agents.robo_advisor_agent import RoboAdvisorAgent
+
+# from agents.robo_advisor_agent import RoboAdvisorAgent
 
 logger = logging.getLogger(__name__)
 
@@ -33,11 +34,14 @@ class SupervisorAgent:
             model="gpt-4o-mini", temperature=0.3, api_key=os.getenv("OPENAI_API_KEY")
         )
 
-        # Initialize sub-agents
-        self.robo_advisor = RoboAdvisorAgent()
+        # Initialize A2A client for agent communication
+        self.a2a_client = A2AClient()
 
-        # Initialize A2A client (for future external agents)
-        # self.a2a_client = A2AClient()
+        # Agent discovery will happen on first use (lazy initialization)
+        self._agents_discovered = False
+
+        # Use A2A for robo advisor communication instead of direct instantiation
+        # self.robo_advisor = RoboAdvisorAgent()
 
         # Build workflow graph
         self.graph = self._build_graph()
@@ -88,12 +92,19 @@ Respond with ONLY the category name, nothing else."""
         return {**state, "task_type": task_type}
 
     async def _route_task(self, state: SupervisorState) -> SupervisorState:
-        """Route task to appropriate agent"""
+        """Route task to appropriate agent via A2A protocol"""
         task_type = state["task_type"]
         user_message = state["messages"][-1].content
         user_id = state["user_id"]
 
-        # Investment-related tasks go to Robo Advisor
+        # Ensure agents are discovered
+        if not self._agents_discovered:
+            logger.info("Discovering agents...")
+            await self.a2a_client.discover_agents()
+            self._agents_discovered = True
+            logger.info(f"Discovered agents: {list(self.a2a_client.agents.keys())}")
+
+        # Investment-related tasks go to Robo Advisor via A2A
         investment_tasks = [
             "portfolio_analysis",
             "investment_advice",
@@ -102,29 +113,52 @@ Respond with ONLY the category name, nothing else."""
         ]
 
         if task_type in investment_tasks:
-            logger.info(f"Routing to Robo Advisor Agent")
+            logger.info(f"Routing to Robo Advisor Agent via A2A")
 
-            # Call robo advisor
-            result = await self.robo_advisor.process_request(user_message, user_id)
+            try:
+                # Send task to robo advisor via A2A protocol
+                result = await self.a2a_client.send_task(
+                    agent_name="robo_advisor",
+                    message=user_message,
+                    task_id=f"task_{user_id}_{task_type}",
+                    context={"user_id": user_id, "task_type": task_type},
+                )
 
-            response = result["response"]
-            delegated_to = "robo_advisor"
+                # Extract response from A2A message format
+                if "message" in result:
+                    response = result["message"].get("content", "")
+                else:
+                    response = result.get("response", str(result))
+
+                delegated_to = "robo_advisor (A2A)"
+
+            except Exception as e:
+                logger.error(f"Error communicating with Robo Advisor via A2A: {e}")
+                response = f"죄송합니다. Robo Advisor와의 통신 중 오류가 발생했습니다: {str(e)}"
+                delegated_to = "supervisor (error)"
 
         else:
-            # Handle general questions directly
-            logger.info("Handling general question directly")
+            try:
+                # Send task to robo advisor via A2A protocol
+                result = await self.a2a_client.send_task(
+                    agent_name="general_agent",
+                    message=user_message,
+                    task_id=f"task_{user_id}_{task_type}",
+                    context={"user_id": user_id, "task_type": task_type},
+                )
 
-            general_prompt = SystemMessage(
-                content="""You are a helpful financial assistant.
-            
-Answer the user's general question in a friendly and informative way.
-If the question is about investments, portfolios, or financial advice, 
-suggest that they rephrase their question more specifically."""
-            )
+                # Extract response from A2A message format
+                if "message" in result:
+                    response = result["message"].get("content", "")
+                else:
+                    response = result.get("response", str(result))
 
-            general_response = self.llm.invoke([general_prompt] + state["messages"])
-            response = general_response.content
-            delegated_to = "supervisor"
+                delegated_to = "general_agent (A2A)"
+
+            except Exception as e:
+                logger.error(f"Error communicating with General Agent via A2A: {e}")
+                response = f"죄송합니다. general Agent와의 통신 중 오류가 발생했습니다: {str(e)}"
+                delegated_to = "supervisor (error)"
 
         return {
             **state,
@@ -182,21 +216,33 @@ suggest that they rephrase their question more specifically."""
             "user_id": user_id,
         }
 
-    def get_available_agents(self) -> List[Dict[str, Any]]:
-        """Get list of available agents"""
-        return [
+    async def get_available_agents(self) -> List[Dict[str, Any]]:
+        """Get list of available agents via A2A discovery"""
+        agents = [
             {
                 "name": "supervisor",
                 "type": "orchestrator",
                 "description": "Main supervisor agent that routes tasks",
             },
-            {
-                "name": "robo_advisor",
-                "type": "specialist",
-                "description": "Investment advisory and portfolio analysis",
-                "capabilities": self.robo_advisor.get_capabilities(),
-            },
         ]
+
+        # Discover A2A agents
+        try:
+            discovered_agents = await self.a2a_client.discover_agents()
+            for agent_card in discovered_agents:
+                agents.append(
+                    {
+                        "name": agent_card.get("name", "unknown"),
+                        "type": "a2a_agent",
+                        "description": agent_card.get("description", ""),
+                        "capabilities": agent_card.get("capabilities", []),
+                        "service_url": agent_card.get("service_url", ""),
+                    }
+                )
+        except Exception as e:
+            logger.warning(f"Could not discover A2A agents: {e}")
+
+        return agents
 
 
 # Example usage

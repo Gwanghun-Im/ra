@@ -1,29 +1,109 @@
 a2a:
+  # A2A Agent Configuration
+  # This file defines the configuration for Agent-to-Agent (A2A) communication
+
   agents:
+    supervisor:
+      name: "Supervisor Agent"
+      description: "Main orchestrator agent that routes tasks to specialized agents"
+      version: "1.0.0"
+      url: "http://a2a_supervisor:8099"
+      local_card_url: "http://localhost:8099/.well-known/agent.json"
+      card_url: "http://a2a_supervisor:8099/.well-known/agent.json"
+      a2a_endpoint: "http://a2a_supervisor:8099/a2a"
+      capabilities:
+        - task_orchestration
+        - agent_routing
+        - multi_agent_coordination
+        - task_classification
+        - workflow_management
+      modalities:
+        - text
+        - structured_data
+      authentication:
+        type: "none" # For development; use OAuth2 in production
+      enabled: true
+
     robo_advisor:
       name: "Robo Advisor Agent"
-      description: "Investment advisory and portfolio analysis agent"
+      description: "AI-powered investment advisory and portfolio analysis agent"
       version: "1.0.0"
-      url: "http://localhost:8100"
-      card_url: "http://localhost:8100/.well-known/agent.json"
+      url: "http://a2a_robo_advisor:8100"
+      local_card_url: "http://localhost:8100/.well-known/agent.json"
+      card_url: "http://a2a_robo_advisor:8100/.well-known/agent.json"
+      a2a_endpoint: "http://a2a_robo_advisor:8100/a2a"
       capabilities:
         - portfolio_analysis
         - investment_recommendation
         - risk_assessment
         - market_research
+        - performance_calculation
       modalities:
         - text
         - structured_data
       authentication:
-        type: "none"  # For development; use OAuth2 in production
-      
+        type: "none" # For development; use OAuth2 in production
+      enabled: true
+
+    rag_agent:
+      name: "RAG Agent"
+      description: "Specialized agent for knowledge base search and retrieval-augmented generation"
+      version: "1.0.0"
+      url: "http://a2a_rag_agent:8101"
+      local_card_url: "http://localhost:8101/.well-known/agent.json"
+      card_url: "http://a2a_rag_agent:8101/.well-known/agent.json"
+      a2a_endpoint: "http://a2a_rag_agent:8101/a2a"
+      capabilities:
+        - knowledge_base_search
+        - document_retrieval
+        - rag_query
+        - semantic_search
+      modalities:
+        - text
+        - structured_data
+      authentication:
+        type: "none" # For development; use OAuth2 in production
+      enabled: true
+
+    general_agent:
+      name: "General Agent"
+      description: "General purpose conversational agent for question answering and task guidance"
+      version: "1.0.0"
+      url: "http://a2a_general_agent:8102"
+      local_card_url: "http://localhost:8102/.well-known/agent.json"
+      card_url: "http://a2a_general_agent:8102/.well-known/agent.json"
+      a2a_endpoint: "http://a2a_general_agent:8102/a2a"
+      capabilities:
+        - general_conversation
+        - question_answering
+        - information_retrieval
+        - task_guidance
+      modalities:
+        - text
+      authentication:
+        type: "none" # For development; use OAuth2 in production
+      enabled: true
+
   communication:
-    timeout: 60
+    timeout: 60 # seconds
     retry_attempts: 3
-    streaming_enabled: true
+    retry_delay: 2 # seconds
+    streaming_enabled: false
     push_notifications: false
+    connection_pool_size: 10
 
   task_management:
     max_concurrent_tasks: 10
-    task_timeout: 300
+    task_timeout: 300 # seconds
     enable_async: true
+    task_queue_size: 100
+
+  discovery:
+    auto_discover: true
+    discovery_interval: 300 # seconds (5 minutes)
+    cache_agent_cards: true
+
+  logging:
+    level: "INFO"
+    log_a2a_requests: true
+    log_a2a_responses: true
