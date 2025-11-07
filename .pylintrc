@@ -1,2 +1,2 @@
 
-disable=logging-fstring-interpolation
+; disable=logging-fstring-interpolation
