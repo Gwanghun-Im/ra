@@ -2,7 +2,7 @@
 
 import os
 import logging
-from typing import Any, Dict, List, TypedDict
+from typing import Any, Dict, List, TypedDict, Optional
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import HumanMessage, SystemMessage, ToolMessage
 from langgraph.graph import StateGraph, END
@@ -46,7 +46,7 @@ class RoboAdvisorAgent:
         )
 
         # A2A client will be initialized asynchronously
-        self.a2a_client = None
+        self.a2a_client: Optional[A2AClientManager] = None
 
         # Define available tools (RAG tools removed, now using A2A)
         self.tools = [
@@ -153,10 +153,9 @@ For knowledge base queries, research questions, or information retrieval:
         """
         try:
             logger.info(f"Calling RAG Agent via A2A with query: {query}")
-            result = await self.a2a_client.send_task(
+            result = await self.a2a_client.send_message(
                 agent_name="rag_agent",
                 message=query,
-                task_id=f"rag_query_{hash(query)}",
                 context_id=context_id,
             )
 

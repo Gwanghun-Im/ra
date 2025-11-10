@@ -18,11 +18,13 @@ from a2a.types import (
 )
 from src.agents.supervisor_agent import SupervisorAgent
 from src.a2a_agents.message_utils import extract_text_from_message, enqueue_response_as_artifact
+from src.task_management import RedisTaskStore
 
 logger = logging.getLogger(__name__)
 
 # Get service URL from environment or use default
 SERVICE_URL = os.getenv("A2A_SERVICE_URL", "http://localhost:8099")
+REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379")
 
 SUPPORTED_CONTENT_MIME_TYPES = ["text/plain", "text/markdown", "application/json"]
 
@@ -37,28 +39,60 @@ class SupervisorAgentExecutor(AgentExecutor):
         self.agent = agent
 
     async def execute(self, context: RequestContext, event_queue: EventQueue) -> None:
-        """Execute the supervisor agent's logic"""
+        """Execute the supervisor agent's logic with streaming support"""
         try:
             # Extract message content using utility function
             message: Message = context.message
             content = extract_text_from_message(message)
 
+            logger.info("================================")
+            logger.info(f"user_input: {context.get_user_input()}")
+            logger.info(f"task_id: {context.task_id}")
+            logger.info(f"context_id: {context.context_id}")
+            logger.info(f"metadata: {context.metadata}")
+            logger.info(f"current_task: {context.current_task}")
+            logger.info(f"message: {message}")
+            logger.info("================================")
+
             # Extract user_id from context metadata if available
             user_id = "default"
+            logger.info(context.metadata.get("user_id", "default"))
             if context.metadata and isinstance(context.metadata, dict):
                 user_id = context.metadata.get("user_id", "default")
 
             logger.info(f"Supervisor processing task {context.task_id}: {content}")
 
-            # Process with Supervisor
-            result = await self.agent.process_request(content, user_id, context.context_id)
+            # Process with Supervisor using streaming
+            async for response in self.agent.process_request_stream(
+                context.message, user_id, context.context_id, context.task_id
+            ):
+                logger.info(f"Supervisor response for task {context.task_id}: {response}")
+                # Extract text from Task response
+                if isinstance(response, tuple):
+                    task, _ = response
 
-            # Enqueue response as artifact
+                    # Extract text from artifacts
+                    if hasattr(task, "artifacts") and task.artifacts:
+                        for artifact in task.artifacts:
+                            if hasattr(artifact, "parts"):
+                                for part in artifact.parts:
+                                    actual_part = part.root if hasattr(part, "root") else part
+                                    if hasattr(actual_part, "text") and actual_part.text:
+                                        # Enqueue intermediate response
+                                        await enqueue_response_as_artifact(
+                                            event_queue=event_queue,
+                                            task_id=context.task_id,
+                                            context_id=context.context_id,
+                                            response_text=actual_part.text,
+                                            final=False,
+                                        )
+
+            # Send final response marker
             await enqueue_response_as_artifact(
                 event_queue=event_queue,
                 task_id=context.task_id,
-                context_id=message.context_id or context.task_id,
-                response_text=result["response"],
+                context_id=context.context_id,
+                response_text="",
                 final=True,
             )
 
@@ -69,7 +103,7 @@ class SupervisorAgentExecutor(AgentExecutor):
             await enqueue_response_as_artifact(
                 event_queue=event_queue,
                 task_id=context.task_id,
-                context_id=context.message.context_id or context.task_id,
+                context_id=context.context_id,
                 response_text=f"Error: {str(e)}",
                 final=True,
             )
@@ -100,7 +134,7 @@ def create_agent_card() -> AgentCard:
     ]
 
     capabilities = AgentCapabilities(
-        streaming=False,
+        streaming=True,
         push_notifications=False,
     )
 
@@ -164,7 +198,7 @@ def create_app():
     agent_executor = LazyAgentExecutor()
 
     # Create task store
-    task_store = InMemoryTaskStore()
+    task_store = RedisTaskStore(redis_url=REDIS_URL)
 
     # Create request handler
     http_handler = DefaultRequestHandler(

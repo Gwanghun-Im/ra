@@ -34,6 +34,7 @@ RUN pip install --no-cache-dir uv && \
 COPY src/agents/ /app/src/agents/
 COPY src/a2a_agents /app/src/a2a_agents
 COPY src/mcp_custom/ /app/src/mcp_custom/
+COPY src/task_management/ /app/src/task_management/
 COPY config/ /app/config/
 
 # Set Python path so modules can be imported

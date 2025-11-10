@@ -1,18 +1,18 @@
 """A2A Client Implementation"""
 
-import httpx
 import os
-import re
-import json
 import uuid
-from typing import Dict, Any, List, Protocol, runtime_checkable, Optional
-from collections.abc import Callable
 import logging
-import yaml
 from pathlib import Path
+from collections.abc import Callable
+from typing import Any, List, Optional, Dict
+
+import httpx
+import yaml
 from a2a.client import A2ACardResolver, A2AClientError, ClientConfig, ClientFactory
 from a2a.client.auth.credentials import CredentialService
 from a2a.types import (
+    Role,
     AgentCard,
     Message,
     Task,
@@ -77,17 +77,10 @@ class RemoteAgentConnections:
     def get_agent(self) -> AgentCard:
         return self.card
 
-    async def send_message(self, message_request: Message) -> Message:
-        # send_message returns an async generator, we need to collect all responses
-        responses = []
+    async def send_message(self, message_request: Message):
+        # send_message returns an async generator, yield responses in real-time
         async for response in self.agent_client.send_message(message_request):
-            responses.append(response)
-
-        # Return the last response (final result)
-        if responses:
-            return responses[-1]
-        else:
-            raise RuntimeError("No response received from agent")
+            yield response
 
 
 class A2AClientManager:
@@ -178,11 +171,11 @@ class A2AClientManager:
         self,
         agent_name: str,
         message: str,
-        task_id: str | None = None,
-        context_id: str | None = None,
         metadata: dict[str, Any] | None = None,
-    ) -> Message:
-        """Send a task to a remote agent (simplified interface for direct use).
+        context_id: str | None = None,
+        streaming: bool = False,
+    ):
+        """Send a task to a remote agent.
 
         Args:
             agent_name: The name of the agent to send the task to.
@@ -190,9 +183,13 @@ class A2AClientManager:
             task_id: Optional task ID. If not provided, one will be generated.
             context_id: Optional context ID (threadId). If not provided, one will be generated.
             metadata: Optional metadata dictionary.
+            streaming: If True, yields responses in real-time. If False, returns only the final result.
 
-        Returns:
-            Task object from the agent response.
+        Yields (if streaming=True):
+            ClientEvent (tuple[Task, UpdateEvent]) or Message objects from the agent response.
+
+        Returns (if streaming=False):
+            Final ClientEvent (tuple[Task, UpdateEvent]) or Message object.
         """
         if agent_name not in self.remote_agent_connections:
             raise ValueError(f"Agent {agent_name} not found")
@@ -201,31 +198,37 @@ class A2AClientManager:
         if not client:
             raise ValueError(f"Client not available for {agent_name}")
 
-        message_id = task_id or str(uuid.uuid4())
-        thread_id = context_id or str(uuid.uuid4())
+        message_id = str(uuid.uuid4())
 
         # Create Message object using the imported Message class
         # Note: Use snake_case field names as per A2A spec
         message_request = Message(
-            role="user",
+            role=Role.user,
             parts=[TextPart(text=message)],  # TextPart has 'text' field, 'kind' defaults to 'text'
             message_id=message_id,  # snake_case, not messageId
-            context_id=thread_id,  # optional context_id
+            context_id=context_id,  # optional context_id
+            metadata=metadata,
         )
+        try:
+            if streaming:
+                # Stream responses in real-time
+                async for response in client.send_message(message_request=message_request):
+                    logger.info(f"send_response (streaming): {response}")
+                    yield response
+            else:
+                # Collect all responses and return only the final one
+                final_response = None
+                async for response in client.send_message(message_request=message_request):
+                    final_response = response
 
-        send_response: Message = await client.send_message(message_request=message_request)
-
-        logger.info(f"send_response: {send_response}")
-
-        # if not isinstance(send_response, SendMessageSuccessResponse):
-        #     logger.error("received non-success response")
-        #     return None
-
-        # if not isinstance(send_response.root.result, Task):
-        #     logger.error("received non-task response")
-        #     return None
-
-        return send_response
+                logger.info(f"send_response (final): {final_response}")
+                yield final_response
+        except A2AClientError as e:
+            logger.error(f"A2A Client error when sending message to agent {agent_name}: {e}")
+            raise
+        except Exception as e:
+            logger.error(f"Error sending message to agent {agent_name}: {e}")
+            raise
 
     def list_remote_agents(self):
         """List the available remote agents you can use to delegate the task."""
@@ -264,15 +267,6 @@ class A2AClientManager:
         if agent_name in self.agents:
             return self.agents[agent_name].get("capabilities", [])
         return []
-
-    def get_all_agents(self) -> Dict[str, Dict[str, Any]]:
-        """
-        Get all agents in the registry
-
-        Returns:
-            Dictionary of all agents with their information
-        """
-        return self.agents.copy()
 
     def get_discovered_agents(self) -> Dict[str, Dict[str, Any]]:
         """

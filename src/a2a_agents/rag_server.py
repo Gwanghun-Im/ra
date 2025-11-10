@@ -19,11 +19,13 @@ from a2a.types import (
 )
 from src.agents.rag_agent import RAGAgent
 from src.a2a_agents.message_utils import extract_text_from_message, enqueue_response_as_artifact
+from src.task_management import RedisTaskStore
 
 logger = logging.getLogger(__name__)
 
 # Get service URL from environment or use default
 SERVICE_URL = os.getenv("A2A_SERVICE_URL", "http://localhost:8101")
+REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379")
 
 SUPPORTED_CONTENT_MIME_TYPES = ["text/plain", "text/markdown", "application/json"]
 
@@ -155,7 +157,7 @@ def create_app():
     agent_executor = LazyAgentExecutor()
 
     # Create task store
-    task_store = InMemoryTaskStore()
+    task_store = RedisTaskStore(redis_url=REDIS_URL)
 
     # Create request handler
     http_handler = DefaultRequestHandler(

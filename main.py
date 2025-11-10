@@ -24,6 +24,30 @@ logger = logging.getLogger(__name__)
 load_dotenv()
 
 
+def extract_task_response(stream_response):
+    """Extract response text from a streaming response (Task tuple or Message).
+
+    Args:
+        stream_response: Either a (Task, UpdateEvent) tuple or Message object
+
+    Returns:
+        Tuple of (response_text, task_object) or (None, None) if no text found
+    """
+    # Handle tuple format: (Task, UpdateEvent)
+    if isinstance(stream_response, tuple):
+        task, _ = stream_response
+
+        if hasattr(task, "artifacts") and task.artifacts:
+            for artifact in task.artifacts:
+                if hasattr(artifact, "parts"):
+                    for part in artifact.parts:
+                        actual_part = part.root if hasattr(part, "root") else part
+                        if hasattr(actual_part, "text"):
+                            return actual_part.text, task
+
+    return None, None
+
+
 async def main():
     """Main function to run the RA system"""
     logger.info("Starting RA (Robo Advisor) Agent System")
@@ -72,38 +96,44 @@ async def main():
                     print(f"\n❌ Error discovering agents: {e}\n")
                 continue
 
-            # Process request via A2A protocol
+            # Process request via A2A protocol with streaming
             print("\nAssistant: ", end="", flush=True)
             try:
-                # Send task to supervisor agent via A2A
-                task_result = await a2a_client.send_message(
+                # Send task to supervisor agent via A2A with streaming enabled
+                final_response = None
+                final_task = None
+
+                async for stream_response in a2a_client.send_message(
                     agent_name="supervisor",
                     message=user_input,
-                    task_id=f"cli_task_{hash(user_input)}",
-                )
+                    context_id=str(hash("cli_user")),
+                    metadata={"user_id": "cli_user"},
+                    streaming=True,
+                ):
+                    response_text, task = extract_task_response(stream_response)
 
-                if task_result is None:
-                    print("Failed to get response from agent\n")
-                    continue
+                    if response_text:
+                        # Clear previous line and display new response
+                        print("\r" + " " * 100 + "\r", end="")
+                        print(f"Assistant: {response_text}", end="", flush=True)
+                        final_response = response_text
+                        final_task = task
 
-                # Extract response text from Task object
-                response = "No response available"
-                if hasattr(task_result, "artifacts") and task_result.artifacts:
-                    for artifact in task_result.artifacts:
-                        if hasattr(artifact, "parts"):
-                            for part in artifact.parts:
-                                if hasattr(part, "text"):
-                                    response = part.text
-                                    break
-
-                print(response)
-
-                # Display task metadata
-                if hasattr(task_result, "id"):
-                    print(f"\n[Task ID: {task_result.id}", end="")
-                    if hasattr(task_result, "status"):
-                        print(f" | Status: {task_result.status}", end="")
-                    print("]")
+                # Final newline and metadata
+                if final_response:
+                    print()
+                    if final_task and hasattr(final_task, "id"):
+                        print(f"\n[Task ID: {final_task.id}", end="")
+                        if hasattr(final_task, "status"):
+                            status = (
+                                final_task.status.state
+                                if hasattr(final_task.status, "state")
+                                else final_task.status
+                            )
+                            print(f" | Status: {status}", end="")
+                        print("]")
+                else:
+                    print("No response available")
                 print()
 
             except Exception as e:

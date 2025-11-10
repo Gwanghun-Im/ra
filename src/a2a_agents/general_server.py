@@ -1,10 +1,10 @@
 """A2A Server Implementation for General Agent"""
 
 import os
-import uvicorn
 import logging
 from collections.abc import Iterable
 from contextlib import asynccontextmanager
+import uvicorn
 from a2a.server.apps import A2AStarletteApplication
 from a2a.server.agent_execution import AgentExecutor, RequestContext
 from a2a.server.events.event_queue import EventQueue
@@ -15,15 +15,16 @@ from a2a.types import (
     AgentCard,
     AgentSkill,
     Message,
-    TextPart,
 )
 from src.agents.general_agent import GeneralAgent
 from src.a2a_agents.message_utils import extract_text_from_message, enqueue_response_as_artifact
+from src.task_management import RedisTaskStore
 
 logger = logging.getLogger(__name__)
 
 # Get service URL from environment or use default
 SERVICE_URL = os.getenv("A2A_SERVICE_URL", "http://localhost:8102")
+REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379")
 
 SUPPORTED_CONTENT_MIME_TYPES = ["text/plain", "text/markdown", "application/json"]
 
@@ -58,7 +59,7 @@ class GeneralAgentExecutor(AgentExecutor):
             await enqueue_response_as_artifact(
                 event_queue=event_queue,
                 task_id=context.task_id,
-                context_id=message.context_id or context.task_id,
+                context_id=context.context_id,
                 response_text=result["response"],
                 final=True,
             )
@@ -70,7 +71,7 @@ class GeneralAgentExecutor(AgentExecutor):
             await enqueue_response_as_artifact(
                 event_queue=event_queue,
                 task_id=context.task_id,
-                context_id=context.message.context_id or context.task_id,
+                context_id=context.context_id,
                 response_text=f"Error: {str(e)}",
                 final=True,
             )
@@ -163,7 +164,7 @@ def create_app():
     agent_executor = LazyAgentExecutor()
 
     # Create task store
-    task_store = InMemoryTaskStore()
+    task_store = RedisTaskStore(redis_url=REDIS_URL)
 
     # Create request handler
     http_handler = DefaultRequestHandler(

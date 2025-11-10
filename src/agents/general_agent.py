@@ -15,7 +15,14 @@ logger = logging.getLogger(__name__)
 
 
 class AgentState(TypedDict):
-    """State for the General Agent"""
+    """
+    State for the General Agent
+    Attributes:
+        `messages`: List of messages exchanged so far
+        `user_id`: Identifier for the user
+        `context_id`: Context identifier for the conversation
+        `next_action`: Next action to be taken by the agent
+    """
 
     messages: List[Any]
     user_id: str
