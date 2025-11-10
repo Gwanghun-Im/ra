@@ -5,21 +5,21 @@ import os
 import re
 import json
 import uuid
-from typing import Dict, Any, List, Protocol, runtime_checkable
+from typing import Dict, Any, List, Protocol, runtime_checkable, Optional
 from collections.abc import Callable
 import logging
 import yaml
 from pathlib import Path
-from a2a.client import A2AClient, A2ACardResolver
+from a2a.client import A2ACardResolver, A2AClientError, ClientConfig, ClientFactory
+from a2a.client.auth.credentials import CredentialService
 from a2a.types import (
     AgentCard,
-    SendMessageRequest,
-    MessageSendParams,
-    SendMessageResponse,
-    SendMessageSuccessResponse,
+    Message,
     Task,
     TaskArtifactUpdateEvent,
     TaskStatusUpdateEvent,
+    TextPart,
+    TransportProtocol,
 )
 
 logger = logging.getLogger(__name__)
@@ -28,43 +28,66 @@ TaskCallbackArg = Task | TaskStatusUpdateEvent | TaskArtifactUpdateEvent
 TaskUpdateCallback = Callable[[TaskCallbackArg, AgentCard], Task]
 
 
-@runtime_checkable
-class GraphContext(Protocol):
-    """Protocol for LangGraph node execution context.
-
-    This protocol defines the interface for the context object passed to
-    send_message when used within a LangGraph node function. The context
-    provides access to the graph's state dictionary.
-
-    Attributes:
-        state: Dictionary containing the current graph state, which may include:
-            - task_id (str, optional): Unique identifier for the task
-            - context_id (str, optional): Context identifier for message grouping
-            - active_agent (str, optional): Name of the currently active agent
-            - input_message_metadata (dict, optional): Message metadata with optional message_id
-    """
-
-    @property
-    def state(self) -> Dict[str, Any]:
-        """Access the graph's state dictionary."""
-        ...
-
-
 class RemoteAgentConnections:
     """A class to hold the connections to the remote agents."""
 
-    def __init__(self, agent_card: AgentCard, agent_url: str):
+    def __init__(
+        self,
+        agent_card: AgentCard,
+        agent_url: str,
+        streaming: bool = False,
+        credential_service: Optional[CredentialService] = None,
+    ):
         print(f"agent_card: {agent_card}")
         print(f"agent_url: {agent_url}")
         self._httpx_client = httpx.AsyncClient(timeout=30)
-        self.agent_client = A2AClient(self._httpx_client, agent_card, url=agent_url + "/a2a")
+
+        # A2A 클라이언트 설정
+        config = ClientConfig(
+            streaming=streaming,
+            polling=not streaming,
+            httpx_client=self._httpx_client,
+            supported_transports=[
+                TransportProtocol.jsonrpc,
+                TransportProtocol.http_json,
+            ],
+            accepted_output_modes=[
+                "text/plain",
+                "text/markdown",
+                "application/json",
+                "text/event-stream",
+            ],
+            use_client_preference=True,
+        )
+
+        factory = ClientFactory(config=config)
+
+        # 인터셉터 추가 (인증이 필요한 경우)
+        # - 토큰 기반 인증 등 환경에서 자동 헤더 주입을 지원합니다.
+        interceptors = []
+        if credential_service:
+            from a2a.client.auth.interceptor import AuthInterceptor
+
+            interceptors.append(AuthInterceptor(credential_service))
+            logger.debug("Auth interceptor added")
+
+        self.agent_client = factory.create(card=agent_card, interceptors=interceptors)
         self.card = agent_card
 
     def get_agent(self) -> AgentCard:
         return self.card
 
-    async def send_message(self, message_request: SendMessageRequest) -> SendMessageResponse:
-        return await self.agent_client.send_message(message_request)
+    async def send_message(self, message_request: Message) -> Message:
+        # send_message returns an async generator, we need to collect all responses
+        responses = []
+        async for response in self.agent_client.send_message(message_request):
+            responses.append(response)
+
+        # Return the last response (final result)
+        if responses:
+            return responses[-1]
+        else:
+            raise RuntimeError("No response received from agent")
 
 
 class A2AClientManager:
@@ -97,6 +120,18 @@ class A2AClientManager:
 
         logger.info(f"A2A Client initialized (Docker: {self.is_docker}, timeout: {timeout}s)")
 
+    @classmethod
+    async def create(
+        cls,
+        remote_agent_names: list[str],
+        task_callback: TaskUpdateCallback | None = None,
+        config_path: str = "config/a2a_config.yaml",
+    ) -> "A2AClientManager":
+        """Create and asynchronously initialize an instance of the A2AClientManager."""
+        instance = cls(config_path=config_path, task_callback=task_callback)
+        await instance._async_init_components(remote_agent_names)
+        return instance
+
     def _load_config(self, config_path: str) -> Dict[str, Any]:
         """Load A2A configuration"""
         config_file = Path(config_path)
@@ -120,6 +155,12 @@ class A2AClientManager:
                 try:
                     card = await card_resolver.get_agent_card()  # get_agent_card is async
 
+                    # 도커 외부에서 접속하는 경우 agent card의 URL을 로컬 주소로 override
+                    # agent card에는 도커 내부 호스트명이 포함되어 있을 수 있지만,
+                    # 호스트 머신에서 접속할 때는 localhost를 사용해야 함
+                    if not self.is_docker:
+                        card.url = address
+
                     remote_connection = RemoteAgentConnections(agent_card=card, agent_url=address)
                     self.remote_agent_connections[card.name] = remote_connection
                     self.cards[card.name] = card
@@ -133,14 +174,14 @@ class A2AClientManager:
             agent_name = agent_detail_dict["name"]
             self.agents[agent_name] = {**agent_detail_dict, "discovered": True}
 
-    async def send_task(
+    async def send_message(
         self,
         agent_name: str,
         message: str,
         task_id: str | None = None,
         context_id: str | None = None,
-        metadata: dict | None = None,
-    ):
+        metadata: dict[str, Any] | None = None,
+    ) -> Message:
         """Send a task to a remote agent (simplified interface for direct use).
 
         Args:
@@ -163,109 +204,28 @@ class A2AClientManager:
         message_id = task_id or str(uuid.uuid4())
         thread_id = context_id or str(uuid.uuid4())
 
-        # A2A Protocol v0.3.0 compliant structure
-        # messageId, thread are separate from message object
-        payload = {
-            "message": {
-                "role": "user",
-                "parts": [{"type": "text", "text": message}],
-                "messageId": message_id,
-            },
-            "thread": {"threadId": thread_id},
-        }
-
-        # Add metadata if provided
-        if metadata:
-            payload["metadata"] = metadata
-
-        message_request = SendMessageRequest(
-            id=message_id, params=MessageSendParams.model_validate(payload)
-        )
-        send_response: SendMessageResponse = await client.send_message(
-            message_request=message_request
+        # Create Message object using the imported Message class
+        # Note: Use snake_case field names as per A2A spec
+        message_request = Message(
+            role="user",
+            parts=[TextPart(text=message)],  # TextPart has 'text' field, 'kind' defaults to 'text'
+            message_id=message_id,  # snake_case, not messageId
+            context_id=thread_id,  # optional context_id
         )
 
-        logger.info(f"send_response: {send_response.model_dump_json(exclude_none=True, indent=2)}")
+        send_response: Message = await client.send_message(message_request=message_request)
 
-        if not isinstance(send_response.root, SendMessageSuccessResponse):
-            logger.error("received non-success response")
-            return None
+        logger.info(f"send_response: {send_response}")
 
-        if not isinstance(send_response.root.result, Task):
-            logger.error("received non-task response")
-            return None
+        # if not isinstance(send_response, SendMessageSuccessResponse):
+        #     logger.error("received non-success response")
+        #     return None
 
-        return send_response.root.result
+        # if not isinstance(send_response.root.result, Task):
+        #     logger.error("received non-task response")
+        #     return None
 
-    async def send_message(self, agent_name: str, task: str, context: GraphContext):
-        """Sends a task to remote agent (LangGraph context version).
-
-        This method is designed to be used within LangGraph node functions where
-        a context object with state management is available.
-
-        Args:
-            agent_name: The name of the agent to send the task to.
-            task: The comprehensive conversation context summary
-                and goal to be achieved regarding user inquiry and purchase request.
-            context: The LangGraph execution context containing the state dictionary.
-
-        Returns:
-            Task object from the agent response, or None if the request fails.
-        """
-        if agent_name not in self.remote_agent_connections:
-            raise ValueError(f"Agent {agent_name} not found")
-        state = context.state
-        state["active_agent"] = agent_name
-        client = self.remote_agent_connections[agent_name]
-
-        if not client:
-            raise ValueError(f"Client not available for {agent_name}")
-        # Extract task/context IDs from state
-        task_id = state.get("task_id", str(uuid.uuid4()))
-        context_id = state.get("context_id", str(uuid.uuid4()))
-
-        # Extract metadata
-        metadata = {}
-        if "input_message_metadata" in state:
-            metadata.update(**state["input_message_metadata"])
-
-        message_id = metadata.get("message_id", task_id)
-
-        # A2A Protocol v0.3.0 compliant structure
-        # messageId and thread are separate from message object
-        payload = {
-            "message": {
-                "role": "user",
-                "parts": [{"type": "text", "text": task}],
-            },
-            "messageId": message_id,
-            "thread": {"threadId": context_id},
-        }
-
-        # Add metadata if available
-        if metadata:
-            payload["metadata"] = metadata
-
-        message_request = SendMessageRequest(
-            id=message_id, params=MessageSendParams.model_validate(payload)
-        )
-        send_response: SendMessageResponse = await client.send_message(
-            message_request=message_request
-        )
-        print(
-            "send_response",
-            send_response.model_dump_json(exclude_none=True, indent=2),
-        )
-
-        if not isinstance(send_response.root, SendMessageSuccessResponse):
-            print("received non-success response. Aborting get task ")
-            return None
-
-        if not isinstance(send_response.root.result, Task):
-            print("received non-task response. Aborting get task ")
-            return None
-
-        return send_response.root.result
+        return send_response
 
     def list_remote_agents(self):
         """List the available remote agents you can use to delegate the task."""
@@ -290,18 +250,6 @@ class A2AClientManager:
     async def __aexit__(self, exc_type, exc_val, exc_tb):
         """Async context manager exit"""
         await self.close()
-
-    @classmethod
-    async def create(
-        cls,
-        remote_agent_names: list[str],
-        task_callback: TaskUpdateCallback | None = None,
-        config_path: str = "config/a2a_config.yaml",
-    ) -> "A2AClientManager":
-        """Create and asynchronously initialize an instance of the A2AClientManager."""
-        instance = cls(config_path=config_path, task_callback=task_callback)
-        await instance._async_init_components(remote_agent_names)
-        return instance
 
     def get_agent_capabilities(self, agent_name: str) -> List[str]:
         """

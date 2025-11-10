@@ -1,0 +1,340 @@
+{
+	"info": {
+		"_postman_id": "a2a-agents-collection",
+		"name": "A2A Agents Collection",
+		"description": "Collection for testing A2A (Agent-to-Agent) protocol servers",
+		"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+	},
+	"item": [
+		{
+			"name": "Agent Cards",
+			"item": [
+				{
+					"name": "Get Supervisor Agent Card",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "http://localhost:8099/.well-known/agent-card.json",
+							"protocol": "http",
+							"host": ["localhost"],
+							"port": "8099",
+							"path": [".well-known", "agent-card.json"]
+						},
+						"description": "Get the agent card for Supervisor Agent"
+					}
+				},
+				{
+					"name": "Get Robo Advisor Agent Card",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "http://localhost:8100/.well-known/agent-card.json",
+							"protocol": "http",
+							"host": ["localhost"],
+							"port": "8100",
+							"path": [".well-known", "agent-card.json"]
+						},
+						"description": "Get the agent card for Robo Advisor Agent"
+					}
+				},
+				{
+					"name": "Get RAG Agent Card",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "http://localhost:8101/.well-known/agent-card.json",
+							"protocol": "http",
+							"host": ["localhost"],
+							"port": "8101",
+							"path": [".well-known", "agent-card.json"]
+						},
+						"description": "Get the agent card for RAG Agent"
+					}
+				},
+				{
+					"name": "Get General Agent Card",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "http://localhost:8102/.well-known/agent-card.json",
+							"protocol": "http",
+							"host": ["localhost"],
+							"port": "8102",
+							"path": [".well-known", "agent-card.json"]
+						},
+						"description": "Get the agent card for General Agent"
+					}
+				}
+			],
+			"description": "Retrieve agent cards for all A2A agents"
+		},
+		{
+			"name": "Send Messages",
+			"item": [
+				{
+					"name": "Send Message to Supervisor (Investment Question)",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"role\": \"user\",\n  \"parts\": [\n    {\n      \"kind\": \"text\",\n      \"text\": \"내 포트폴리오를 분석해줘\"\n    }\n  ],\n  \"message_id\": \"{{$guid}}\",\n  \"context_id\": \"test-context-001\"\n}"
+						},
+						"url": {
+							"raw": "http://localhost:8099/a2a/v1/messages",
+							"protocol": "http",
+							"host": ["localhost"],
+							"port": "8099",
+							"path": ["a2a", "v1", "messages"]
+						},
+						"description": "Send investment-related question to Supervisor (will route to Robo Advisor)"
+					}
+				},
+				{
+					"name": "Send Message to Supervisor (General Question)",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"role\": \"user\",\n  \"parts\": [\n    {\n      \"kind\": \"text\",\n      \"text\": \"안녕하세요, 무엇을 도와드릴까요?\"\n    }\n  ],\n  \"message_id\": \"{{$guid}}\",\n  \"context_id\": \"test-context-002\"\n}"
+						},
+						"url": {
+							"raw": "http://localhost:8099/a2a/v1/messages",
+							"protocol": "http",
+							"host": ["localhost"],
+							"port": "8099",
+							"path": ["a2a", "v1", "messages"]
+						},
+						"description": "Send general question to Supervisor (will route to General Agent)"
+					}
+				},
+				{
+					"name": "Send Message to Robo Advisor Directly",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"role\": \"user\",\n  \"parts\": [\n    {\n      \"kind\": \"text\",\n      \"text\": \"삼성전자에 투자하는 것이 좋을까요?\"\n    }\n  ],\n  \"message_id\": \"{{$guid}}\",\n  \"context_id\": \"test-context-003\"\n}"
+						},
+						"url": {
+							"raw": "http://localhost:8100/a2a/v1/messages",
+							"protocol": "http",
+							"host": ["localhost"],
+							"port": "8100",
+							"path": ["a2a", "v1", "messages"]
+						},
+						"description": "Send investment question directly to Robo Advisor Agent"
+					}
+				},
+				{
+					"name": "Send Message to General Agent Directly",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"role\": \"user\",\n  \"parts\": [\n    {\n      \"kind\": \"text\",\n      \"text\": \"오늘 날씨가 어때요?\"\n    }\n  ],\n  \"message_id\": \"{{$guid}}\",\n  \"context_id\": \"test-context-004\"\n}"
+						},
+						"url": {
+							"raw": "http://localhost:8102/a2a/v1/messages",
+							"protocol": "http",
+							"host": ["localhost"],
+							"port": "8102",
+							"path": ["a2a", "v1", "messages"]
+						},
+						"description": "Send general question directly to General Agent"
+					}
+				},
+				{
+					"name": "Send Message to RAG Agent Directly",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"role\": \"user\",\n  \"parts\": [\n    {\n      \"kind\": \"text\",\n      \"text\": \"투자 관련 문서를 검색해줘\"\n    }\n  ],\n  \"message_id\": \"{{$guid}}\",\n  \"context_id\": \"test-context-005\"\n}"
+						},
+						"url": {
+							"raw": "http://localhost:8101/a2a/v1/messages",
+							"protocol": "http",
+							"host": ["localhost"],
+							"port": "8101",
+							"path": ["a2a", "v1", "messages"]
+						},
+						"description": "Send document search request to RAG Agent"
+					}
+				}
+			],
+			"description": "Send messages to various A2A agents"
+		},
+		{
+			"name": "Task Management",
+			"item": [
+				{
+					"name": "Get Task Status (Supervisor)",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "http://localhost:8099/a2a/v1/tasks/:taskId",
+							"protocol": "http",
+							"host": ["localhost"],
+							"port": "8099",
+							"path": ["a2a", "v1", "tasks", ":taskId"],
+							"variable": [
+								{
+									"key": "taskId",
+									"value": "task-id-here",
+									"description": "Task ID to query"
+								}
+							]
+						},
+						"description": "Get the status of a specific task from Supervisor Agent"
+					}
+				},
+				{
+					"name": "Get Task Status (Robo Advisor)",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "http://localhost:8100/a2a/v1/tasks/:taskId",
+							"protocol": "http",
+							"host": ["localhost"],
+							"port": "8100",
+							"path": ["a2a", "v1", "tasks", ":taskId"],
+							"variable": [
+								{
+									"key": "taskId",
+									"value": "task-id-here",
+									"description": "Task ID to query"
+								}
+							]
+						},
+						"description": "Get the status of a specific task from Robo Advisor Agent"
+					}
+				}
+			],
+			"description": "Manage and query task status"
+		},
+		{
+			"name": "Health Checks",
+			"item": [
+				{
+					"name": "Health Check - Supervisor",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "http://localhost:8099/health",
+							"protocol": "http",
+							"host": ["localhost"],
+							"port": "8099",
+							"path": ["health"]
+						},
+						"description": "Check if Supervisor Agent server is running"
+					}
+				},
+				{
+					"name": "Health Check - Robo Advisor",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "http://localhost:8100/health",
+							"protocol": "http",
+							"host": ["localhost"],
+							"port": "8100",
+							"path": ["health"]
+						},
+						"description": "Check if Robo Advisor Agent server is running"
+					}
+				},
+				{
+					"name": "Health Check - RAG Agent",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "http://localhost:8101/health",
+							"protocol": "http",
+							"host": ["localhost"],
+							"port": "8101",
+							"path": ["health"]
+						},
+						"description": "Check if RAG Agent server is running"
+					}
+				},
+				{
+					"name": "Health Check - General Agent",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "http://localhost:8102/health",
+							"protocol": "http",
+							"host": ["localhost"],
+							"port": "8102",
+							"path": ["health"]
+						},
+						"description": "Check if General Agent server is running"
+					}
+				}
+			],
+			"description": "Health check endpoints for all agents"
+		}
+	],
+	"variable": [
+		{
+			"key": "supervisor_url",
+			"value": "http://localhost:8099",
+			"type": "string"
+		},
+		{
+			"key": "robo_advisor_url",
+			"value": "http://localhost:8100",
+			"type": "string"
+		},
+		{
+			"key": "rag_agent_url",
+			"value": "http://localhost:8101",
+			"type": "string"
+		},
+		{
+			"key": "general_agent_url",
+			"value": "http://localhost:8102",
+			"type": "string"
+		}
+	]
+}

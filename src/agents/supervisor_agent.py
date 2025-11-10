@@ -2,14 +2,19 @@
 
 import os
 from typing import Any, Dict, List, TypedDict, Literal
+import logging
+
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import HumanMessage, SystemMessage
 from langgraph.graph import StateGraph, END
-import logging
+from a2a.types import Message, Task
 
-from a2a.client import A2AClient
+from src.a2a_agents.client import A2AClientManager
+from src.a2a_agents.message_utils import extract_text_from_message
 
-# from agents.robo_advisor_agent import RoboAdvisorAgent
+from dotenv import load_dotenv
+
+load_dotenv()
 
 logger = logging.getLogger(__name__)
 
@@ -19,6 +24,7 @@ class SupervisorState(TypedDict):
 
     messages: List[Any]
     user_id: str
+    context_id: str | None
     task_type: str
     delegated_to: str | None
     response: str | None
@@ -29,13 +35,13 @@ class SupervisorAgent:
     """Supervisor Agent that orchestrates tasks between agents"""
 
     def __init__(self):
-        """Initialize Supervisor Agent"""
+        """Initialize Supervisor Agent (synchronous part)"""
         self.llm = ChatOpenAI(
             model="gpt-4o-mini", temperature=0.3, api_key=os.getenv("OPENAI_API_KEY")
         )
 
-        # Initialize A2A client for agent communication
-        self.a2a_client = A2AClient()
+        # A2A client will be initialized asynchronously
+        self.a2a_client: A2AClientManager = None
 
         # Agent discovery will happen on first use (lazy initialization)
         self._agents_discovered = False
@@ -46,7 +52,18 @@ class SupervisorAgent:
         # Build workflow graph
         self.graph = self._build_graph()
 
-        logger.info("Supervisor Agent initialized")
+        logger.info("Supervisor Agent initialized (A2A client pending async init)")
+
+    @classmethod
+    async def create(cls):
+        """Factory method to create and fully initialize SupervisorAgent"""
+        instance = cls()
+        # Initialize A2A client asynchronously
+        instance.a2a_client = await A2AClientManager.create(
+            remote_agent_names=["robo_advisor", "general_agent"]
+        )
+        logger.info("Supervisor Agent fully initialized with A2A client")
+        return instance
 
     def _build_graph(self) -> StateGraph:
         """Build supervisor workflow"""
@@ -96,13 +113,7 @@ Respond with ONLY the category name, nothing else."""
         task_type = state["task_type"]
         user_message = state["messages"][-1].content
         user_id = state["user_id"]
-
-        # Ensure agents are discovered
-        if not self._agents_discovered:
-            logger.info("Discovering agents...")
-            await self.a2a_client.discover_agents()
-            self._agents_discovered = True
-            logger.info(f"Discovered agents: {list(self.a2a_client.agents.keys())}")
+        context_id = state["context_id"]
 
         # Investment-related tasks go to Robo Advisor via A2A
         investment_tasks = [
@@ -117,19 +128,20 @@ Respond with ONLY the category name, nothing else."""
 
             try:
                 # Send task to robo advisor via A2A protocol
-                result = await self.a2a_client.send_task(
+                result: Task = await self.a2a_client.send_message(
                     agent_name="robo_advisor",
                     message=user_message,
                     task_id=f"task_{user_id}_{task_type}",
-                    context={"user_id": user_id, "task_type": task_type},
+                    context_id=context_id,
                 )
 
                 # Extract response from A2A message format
-                if "message" in result:
-                    response = result["message"].get("content", "")
-                else:
-                    response = result.get("response", str(result))
+                # if "message" in result:
+                #     response = result["message"].get("content", "")
+                # else:
+                #     response = result.get("response", str(result))
 
+                # response = extract_text_from_message(result)
                 delegated_to = "robo_advisor (A2A)"
 
             except Exception as e:
@@ -140,18 +152,21 @@ Respond with ONLY the category name, nothing else."""
         else:
             try:
                 # Send task to robo advisor via A2A protocol
-                result = await self.a2a_client.send_task(
+                result: Task = await self.a2a_client.send_message(
                     agent_name="general_agent",
                     message=user_message,
                     task_id=f"task_{user_id}_{task_type}",
-                    context={"user_id": user_id, "task_type": task_type},
+                    context_id=context_id,
                 )
+                logger.info(f"result: {result}")
 
                 # Extract response from A2A message format
-                if "message" in result:
-                    response = result["message"].get("content", "")
-                else:
-                    response = result.get("response", str(result))
+                # if "message" in result:
+                #     # response = result["message"].get("content", "")
+                #     response = result.metadata
+                # else:
+                #     response = result.get("response", str(result))
+                # response = extract_text_from_message(result)
 
                 delegated_to = "general_agent (A2A)"
 
@@ -162,7 +177,7 @@ Respond with ONLY the category name, nothing else."""
 
         return {
             **state,
-            "response": response,
+            "response": result,
             "delegated_to": delegated_to,
             "next_step": "finalize",
         }
@@ -183,13 +198,16 @@ Respond with ONLY the category name, nothing else."""
 
         return {**state, "response": final_response}
 
-    async def process_request(self, user_message: str, user_id: str = "default") -> Dict[str, Any]:
+    async def process_request(
+        self, user_message: str, user_id: str = "default", context_id: str | None = None
+    ) -> Dict[str, Any]:
         """
         Process user request through supervisor workflow
 
         Args:
             user_message: User's message
             user_id: User identifier
+            context_id: Optional context ID for conversation tracking
 
         Returns:
             Response dictionary
@@ -200,6 +218,7 @@ Respond with ONLY the category name, nothing else."""
         initial_state: SupervisorState = {
             "messages": [HumanMessage(content=user_message)],
             "user_id": user_id,
+            "context_id": context_id,
             "task_type": "",
             "delegated_to": None,
             "response": None,
@@ -243,32 +262,3 @@ Respond with ONLY the category name, nothing else."""
             logger.warning(f"Could not discover A2A agents: {e}")
 
         return agents
-
-
-# Example usage
-if __name__ == "__main__":
-    import asyncio
-
-    async def main():
-        supervisor = SupervisorAgent()
-
-        # Test requests
-        test_queries = [
-            "애플 주식의 현재 가격이 얼마인가요?",
-            "내 포트폴리오를 분석하고 개선 방안을 제안해주세요",
-            "현재 내 포트폴리오는 얼마나 위험한가요?",
-            "복리란 무엇인가요?",
-        ]
-
-        for query in test_queries:
-            print(f"\n{'='*60}")
-            print(f"Query: {query}")
-            print(f"{'='*60}")
-
-            result = await supervisor.process_request(query, user_id="test")
-
-            print(f"\nTask Type: {result['task_type']}")
-            print(f"Delegated To: {result['delegated_to']}")
-            print(f"\nResponse:\n{result['response']}")
-
-    asyncio.run(main())

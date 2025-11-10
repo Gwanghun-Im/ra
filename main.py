@@ -8,7 +8,7 @@ import sys
 # Add project root to path
 sys.path.append(str(Path(__file__).parent))
 
-from src.a2a.client import A2AClient
+from src.a2a_agents.client import A2AClientManager
 from dotenv import load_dotenv
 
 # Configure logging
@@ -29,7 +29,7 @@ async def main():
     logger.info("Starting RA (Robo Advisor) Agent System")
 
     # Initialize A2A client to communicate with Supervisor
-    a2a_client = A2AClient()
+    a2a_client = await A2AClientManager.create(remote_agent_names=["supervisor"])
 
     print("\n" + "=" * 60)
     print("   RA - Robo Advisor Agent System")
@@ -59,7 +59,7 @@ async def main():
                 print("\nDiscovering available agents...")
                 try:
                     # Discover agents via A2A protocol
-                    discovered = await a2a_client.get_card()
+                    discovered = a2a_client.get_discovered_agents()
                     print(f"\nFound {len(discovered)} agent(s):\n")
                     for agent_card in discovered:
                         print(f"  • {agent_card.get('name', 'Unknown')}")
@@ -76,30 +76,34 @@ async def main():
             print("\nAssistant: ", end="", flush=True)
             try:
                 # Send task to supervisor agent via A2A
-                result = await a2a_client.send_task(
+                task_result = await a2a_client.send_message(
                     agent_name="supervisor",
                     message=user_input,
                     task_id=f"cli_task_{hash(user_input)}",
-                    context={"user_id": "cli_user", "source": "cli"},
                 )
 
-                # Extract and display response
-                if "message" in result:
-                    response = result["message"].get("content", "")
-                else:
-                    response = result.get("response", str(result))
+                if task_result is None:
+                    print("Failed to get response from agent\n")
+                    continue
+
+                # Extract response text from Task object
+                response = "No response available"
+                if hasattr(task_result, "artifacts") and task_result.artifacts:
+                    for artifact in task_result.artifacts:
+                        if hasattr(artifact, "parts"):
+                            for part in artifact.parts:
+                                if hasattr(part, "text"):
+                                    response = part.text
+                                    break
 
                 print(response)
 
-                # Display metadata if available
-                if "artifacts" in result:
-                    artifacts = result["artifacts"]
-                    for artifact in artifacts:
-                        if artifact.get("type") == "routing_info":
-                            data = artifact.get("data", {})
-                            print(
-                                f"\n[Task Type: {data.get('task_type', 'unknown')} | Handled by: {data.get('delegated_to', 'unknown')}]"
-                            )
+                # Display task metadata
+                if hasattr(task_result, "id"):
+                    print(f"\n[Task ID: {task_result.id}", end="")
+                    if hasattr(task_result, "status"):
+                        print(f" | Status: {task_result.status}", end="")
+                    print("]")
                 print()
 
             except Exception as e:

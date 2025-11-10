@@ -7,7 +7,7 @@ from langchain_openai import ChatOpenAI
 from langchain_core.messages import HumanMessage, SystemMessage, ToolMessage
 from langgraph.graph import StateGraph, END
 
-from mcp_custom.tools.mcp_tools import (
+from src.mcp_custom.tools.mcp_tools import (
     get_stock_price_tool,
     get_company_financials_tool,
     get_portfolio_tool,
@@ -15,7 +15,11 @@ from mcp_custom.tools.mcp_tools import (
     analyze_risk_tool,
     search_tavily_tool,
 )
-from a2a.client import A2AClient
+from src.a2a_agents.client import A2AClientManager
+
+from dotenv import load_dotenv
+
+load_dotenv()
 
 logger = logging.getLogger(__name__)
 
@@ -25,6 +29,7 @@ class AgentState(TypedDict):
 
     messages: List[Any]
     user_id: str
+    context_id: str | None
     portfolio_data: Dict[str, Any] | None
     market_data: Dict[str, Any] | None
     analysis_result: Dict[str, Any] | None
@@ -35,13 +40,13 @@ class RoboAdvisorAgent:
     """Robo Advisor Agent using LangGraph"""
 
     def __init__(self):
-        """Initialize the Robo Advisor Agent"""
+        """Initialize the Robo Advisor Agent (synchronous part)"""
         self.llm = ChatOpenAI(
             model="gpt-4o-mini", temperature=0, api_key=os.getenv("OPENAI_API_KEY")
         )
 
-        # Initialize A2A client for communicating with RAG Agent
-        self.a2a_client = A2AClient()
+        # A2A client will be initialized asynchronously
+        self.a2a_client = None
 
         # Define available tools (RAG tools removed, now using A2A)
         self.tools = [
@@ -59,7 +64,16 @@ class RoboAdvisorAgent:
         # Build the graph
         self.graph = self._build_graph()
 
-        logger.info("Robo Advisor Agent initialized with A2A RAG integration")
+        logger.info("Robo Advisor Agent initialized (A2A client pending async init)")
+
+    @classmethod
+    async def create(cls):
+        """Factory method to create and fully initialize RoboAdvisorAgent"""
+        instance = cls()
+        # Initialize A2A client asynchronously
+        instance.a2a_client = await A2AClientManager.create(remote_agent_names=["rag_agent"])
+        logger.info("Robo Advisor Agent fully initialized with A2A RAG integration")
+        return instance
 
     def _build_graph(self) -> StateGraph:
         """Build LangGraph workflow"""
@@ -127,7 +141,7 @@ For knowledge base queries, research questions, or information retrieval:
         # Update state
         return {**state, "messages": messages + [response]}
 
-    async def _call_rag_agent(self, query: str) -> str:
+    async def _call_rag_agent(self, query: str, context_id: str) -> str:
         """
         Call RAG Agent via A2A protocol
 
@@ -139,11 +153,22 @@ For knowledge base queries, research questions, or information retrieval:
         """
         try:
             logger.info(f"Calling RAG Agent via A2A with query: {query}")
-            result = await self.a2a_client.send_task("rag_agent", query)
+            result = await self.a2a_client.send_task(
+                agent_name="rag_agent",
+                message=query,
+                task_id=f"rag_query_{hash(query)}",
+                context_id=context_id,
+            )
 
-            # Extract response content
-            message = result.get("message", {})
-            content = message.get("content", "No response from RAG Agent")
+            # Extract response from Task object
+            content = "No response from RAG Agent"
+            if hasattr(result, "artifacts") and result.artifacts:
+                for artifact in result.artifacts:
+                    if hasattr(artifact, "parts"):
+                        for part in artifact.parts:
+                            if hasattr(part, "text"):
+                                content = part.text
+                                break
 
             logger.info("Successfully received response from RAG Agent")
             return content
@@ -156,6 +181,7 @@ For knowledge base queries, research questions, or information retrieval:
         """Execute tool calls using async HTTP calls to Docker MCP servers"""
         messages = state["messages"]
         last_message = messages[-1]
+        context_id = state["context_id"]
 
         # Check if the message contains RAG-related keywords
         content = last_message.content.lower() if hasattr(last_message, "content") else ""
@@ -176,7 +202,7 @@ For knowledge base queries, research questions, or information retrieval:
 
         # If RAG is needed, call RAG Agent via A2A
         if needs_rag:
-            rag_response = await self._call_rag_agent(content)
+            rag_response = await self._call_rag_agent(content, context_id=context_id)
             tool_messages.append(HumanMessage(content=f"[RAG Agent Response]: {rag_response}"))
 
         # Create a mapping of tool names to tool functions
@@ -251,7 +277,9 @@ Format your response clearly with sections and bullet points."""
             "analysis_result": {"content": final_response.content, "timestamp": "now"},
         }
 
-    async def process_request(self, user_message: str, user_id: str = "default") -> Dict[str, Any]:
+    async def process_request(
+        self, user_message: str, user_id: str = "default", context_id: str | None = None
+    ) -> Dict[str, Any]:
         """
         Process user request
 
@@ -268,6 +296,7 @@ Format your response clearly with sections and bullet points."""
         initial_state: AgentState = {
             "messages": [HumanMessage(content=user_message)],
             "user_id": user_id,
+            "context_id": context_id,
             "portfolio_data": None,
             "market_data": None,
             "analysis_result": None,
@@ -289,31 +318,3 @@ Format your response clearly with sections and bullet points."""
             "analysis_result": final_state.get("analysis_result"),
             "message_count": len(final_state["messages"]),
         }
-
-    def get_capabilities(self) -> List[str]:
-        """Return list of agent capabilities"""
-        return [
-            "portfolio_analysis",
-            "investment_recommendation",
-            "risk_assessment",
-            "market_research",
-            "performance_calculation",
-        ]
-
-
-# Example usage
-if __name__ == "__main__":
-    import asyncio
-
-    async def main():
-        agent = RoboAdvisorAgent()
-
-        # Test request
-        result = await agent.process_request(
-            "Analyze my portfolio and suggest some improvements", user_id="test_user"
-        )
-
-        print("Agent Response:")
-        print(result["response"])
-
-    asyncio.run(main())

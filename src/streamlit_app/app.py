@@ -14,7 +14,8 @@ load_dotenv(env_path)
 # Add parent directory to path
 sys.path.append(str(Path(__file__).parent.parent))
 
-from agents.supervisor_agent import SupervisorAgent
+# from agents.supervisor_agent import SupervisorAgent
+from src.a2a_agents.client import A2AClientManager
 from vector_db.faiss_manager import FAISSManager
 import logging
 
@@ -28,14 +29,6 @@ st.set_page_config(
 )
 
 
-# Initialize session state
-if "supervisor" not in st.session_state:
-    st.session_state.supervisor = SupervisorAgent()
-    st.session_state.faiss_manager = FAISSManager()
-    st.session_state.messages = []
-    st.session_state.user_id = "streamlit_user"
-
-
 def run_async(coro):
     """Run async function in Streamlit"""
     try:
@@ -44,6 +37,16 @@ def run_async(coro):
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
     return loop.run_until_complete(coro)
+
+
+# Initialize session state
+if "supervisor" not in st.session_state:
+    st.session_state.a2a_client = run_async(
+        A2AClientManager.create(remote_agent_names=["supervisor"])
+    )
+    st.session_state.faiss_manager = FAISSManager()
+    st.session_state.messages = []
+    st.session_state.user_id = "streamlit_user"
 
 
 # Sidebar
@@ -65,18 +68,11 @@ with st.sidebar:
 
     # Get available agents asynchronously
     try:
-        agents = run_async(st.session_state.supervisor.get_available_agents())
-
-        for agent in agents:
-            with st.expander(f"**{agent['name']}**"):
-                st.write(f"*Type:* {agent['type']}")
-                st.write(f"*Description:* {agent['description']}")
-                if "capabilities" in agent and agent["capabilities"]:
-                    st.write("*Capabilities:*")
-                    for cap in agent["capabilities"]:
-                        st.write(f"  • {cap}")
-                if "service_url" in agent:
-                    st.write(f"*Service URL:* {agent['service_url']}")
+        agents = st.session_state.a2a_client.get_discovered_agents()
+        logger.info(f"Discovered agents: {agents}")
+        for agent_name, agent_info in agents.items():
+            with st.expander(f"**{agent_name}**"):
+                st.write(f"*Description:* {agent_info.get('description', 'N/A')}")
     except Exception as e:
         st.error(f"Error loading agents: {e}")
 
@@ -127,30 +123,49 @@ if prompt := st.chat_input("Ask me anything about investments..."):
         with st.spinner("Thinking..."):
             try:
                 # Process request through supervisor
-                result = run_async(
-                    st.session_state.supervisor.process_request(
-                        prompt, user_id=st.session_state.user_id
+                task_result = run_async(
+                    st.session_state.a2a_client.send_task(
+                        agent_name="supervisor",
+                        message=prompt,
+                        task_id=f"cli_task_{hash(prompt)}",
                     )
                 )
 
-                response_text = result["response"]
+                if task_result is None:
+                    st.error("Failed to get response from agent")
+                    st.session_state.messages.append(
+                        {"role": "assistant", "content": "Failed to get response from agent"}
+                    )
+                else:
+                    # Extract response text from Task object
+                    # Task object has artifacts which contain the actual response
+                    response_text = "No response available"
+                    if hasattr(task_result, "artifacts") and task_result.artifacts:
+                        for artifact in task_result.artifacts:
+                            if hasattr(artifact, "parts"):
+                                for part in artifact.parts:
+                                    if hasattr(part, "text"):
+                                        response_text = part.text
+                                        break
 
-                # Display response
-                st.markdown(response_text)
+                    # Display response
+                    st.markdown(response_text)
 
-                # Display task info
-                task_info = {
-                    "task_type": result["task_type"],
-                    "delegated_to": result["delegated_to"],
-                }
+                    # Display task info
+                    task_info = {
+                        "task_id": task_result.id if hasattr(task_result, "id") else "unknown",
+                        "status": (
+                            task_result.status if hasattr(task_result, "status") else "unknown"
+                        ),
+                    }
 
-                with st.expander("Task Information"):
-                    st.json(task_info)
+                    with st.expander("Task Information"):
+                        st.json(task_info)
 
-                # Add assistant message
-                st.session_state.messages.append(
-                    {"role": "assistant", "content": response_text, "metadata": task_info}
-                )
+                    # Add assistant message
+                    st.session_state.messages.append(
+                        {"role": "assistant", "content": response_text, "metadata": task_info}
+                    )
 
             except Exception as e:
                 error_msg = f"Error: {str(e)}"
@@ -159,48 +174,5 @@ if prompt := st.chat_input("Ask me anything about investments..."):
 
                 st.session_state.messages.append({"role": "assistant", "content": error_msg})
 
-# Quick actions
 st.divider()
-# st.subheader("Quick Actions")
-
-# col1, col2, col3 = st.columns(3)
-
-# with col1:
-#     if st.button("📊 Analyze Portfolio", use_container_width=True):
-#         st.session_state.messages.append({
-#             "role": "user",
-#             "content": "Analyze my current portfolio"
-#         })
-#         st.rerun()
-
-# with col2:
-#     if st.button("💡 Get Recommendations", use_container_width=True):
-#         st.session_state.messages.append({
-#             "role": "user",
-#             "content": "What investment recommendations do you have for me?"
-#         })
-#         st.rerun()
-
-# with col3:
-#     if st.button("⚠️ Risk Assessment", use_container_width=True):
-#         st.session_state.messages.append({
-#             "role": "user",
-#             "content": "Assess the risk level of my portfolio"
-#         })
-#         st.rerun()
-
-# # Example queries
-# with st.expander("💭 Example Queries"):
-#     st.markdown("""
-#     Try asking:
-#     - "What's the current price of Apple stock?"
-#     - "Analyze my portfolio performance"
-#     - "How risky is my current portfolio?"
-#     - "Give me investment recommendations for tech stocks"
-#     - "What are the latest market news?"
-#     - "Calculate my portfolio returns"
-#     """)
-
-# Footer
-# st.divider()
 st.caption("RA - Robo Advisor Agent System | Powered by MCP & A2A")

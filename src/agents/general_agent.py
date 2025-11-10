@@ -4,18 +4,12 @@ import os
 import logging
 from typing import Any, Dict, List, TypedDict
 from langchain_openai import ChatOpenAI
-from langchain_core.messages import HumanMessage, SystemMessage, ToolMessage
+from langchain_core.messages import HumanMessage, SystemMessage
 from langgraph.graph import StateGraph, END
 
-from mcp_custom.tools.mcp_tools import (
-    get_stock_price_tool,
-    get_company_financials_tool,
-    get_portfolio_tool,
-    calculate_returns_tool,
-    analyze_risk_tool,
-    search_tavily_tool,
-)
-from a2a.client import A2AClient
+from dotenv import load_dotenv
+
+load_dotenv()
 
 logger = logging.getLogger(__name__)
 
@@ -25,6 +19,7 @@ class AgentState(TypedDict):
 
     messages: List[Any]
     user_id: str
+    context_id: str | None
     next_action: str
 
 
@@ -32,7 +27,7 @@ class GeneralAgent:
     """General Agent using LangGraph"""
 
     def __init__(self):
-        """Initialize the General Agent"""
+        """Initialize the General Agent (synchronous part)"""
         self.llm = ChatOpenAI(
             model="gpt-4o-mini", temperature=0, api_key=os.getenv("OPENAI_API_KEY")
         )
@@ -44,6 +39,13 @@ class GeneralAgent:
         self.graph = self._build_graph()
 
         logger.info("General Agent initialized")
+
+    @classmethod
+    async def create(cls):
+        """Factory method to create and fully initialize GeneralAgent"""
+        instance = cls()
+        logger.info("General Agent fully initialized")
+        return instance
 
     def _build_graph(self) -> StateGraph:
         """Build LangGraph workflow"""
@@ -79,7 +81,9 @@ suggest that they rephrase their question more specifically."""
         # Update state
         return {**state, "messages": messages + [response]}
 
-    async def process_request(self, user_message: str, user_id: str = "default") -> Dict[str, Any]:
+    async def process_request(
+        self, user_message: str, user_id: str = "default", context_id: str | None = None
+    ) -> Dict[str, Any]:
         """
         Process user request
 
@@ -96,6 +100,7 @@ suggest that they rephrase their question more specifically."""
         initial_state: AgentState = {
             "messages": [HumanMessage(content=user_message)],
             "user_id": user_id,
+            "context_id": context_id,
             "next_action": "start",
         }
 
@@ -111,33 +116,6 @@ suggest that they rephrase their question more specifically."""
         return {
             "response": response_content,
             "user_id": user_id,
-            "analysis_result": final_state.get("analysis_result"),
+            "message": final_state.get("message"),
             "message_count": len(final_state["messages"]),
         }
-
-    def get_capabilities(self) -> List[str]:
-        """Return list of agent capabilities"""
-        return [
-            "general_conversation",
-            "question_answering",
-            "information_retrieval",
-            "task_guidance",
-        ]
-
-
-# Example usage
-if __name__ == "__main__":
-    import asyncio
-
-    async def main():
-        agent = GeneralAgent()
-
-        # Test request
-        result = await agent.process_request(
-            "Analyze my portfolio and suggest some improvements", user_id="test_user"
-        )
-
-        print("Agent Response:")
-        print(result["response"])
-
-    asyncio.run(main())

@@ -4,6 +4,7 @@ import os
 import uvicorn
 import logging
 from collections.abc import Iterable
+from contextlib import asynccontextmanager
 from a2a.server.apps import A2AStarletteApplication
 from a2a.server.agent_execution import AgentExecutor, RequestContext
 from a2a.server.events.event_queue import EventQueue
@@ -16,7 +17,8 @@ from a2a.types import (
     Message,
     TextPart,
 )
-from agents.rag_agent import RAGAgent
+from src.agents.rag_agent import RAGAgent
+from src.a2a_agents.message_utils import extract_text_from_message, enqueue_response_as_artifact
 
 logger = logging.getLogger(__name__)
 
@@ -38,36 +40,35 @@ class RAGAgentExecutor(AgentExecutor):
     async def execute(self, context: RequestContext, event_queue: EventQueue) -> None:
         """Execute the RAG agent's logic"""
         try:
-            # Extract message content
-            message = context.message
-            content = ""
-            for part in message.parts:
-                if hasattr(part, "text"):
-                    content += part.text
+            # Extract message content using utility function
+            message: Message = context.message
+            content = extract_text_from_message(message)
 
             logger.info(f"RAG Agent processing task {context.task_id}: {content}")
 
             # Process with RAG Agent
             result = await self.agent.process_request(content)
 
-            # Create response message
-            response_message = Message(
-                role="agent", parts=[TextPart(type="text", text=result["response"])]
+            # Enqueue response as artifact
+            await enqueue_response_as_artifact(
+                event_queue=event_queue,
+                task_id=context.task_id,
+                context_id=message.context_id or context.task_id,
+                response_text=result["response"],
+                final=True,
             )
-
-            # Enqueue the final message
-            await event_queue.enqueue_message(response_message)
 
         except Exception as e:
             logger.error(f"Error processing task {context.task_id}: {e}")
 
-            # Create error message
-            error_message = Message(
-                role="agent", parts=[TextPart(type="text", text=f"Error: {str(e)}")]
+            # Enqueue error as artifact
+            await enqueue_response_as_artifact(
+                event_queue=event_queue,
+                task_id=context.task_id,
+                context_id=context.message.context_id or context.task_id,
+                response_text=f"Error: {str(e)}",
+                final=True,
             )
-
-            # Enqueue error message
-            await event_queue.enqueue_message(error_message)
             raise
 
     async def cancel(self, context: RequestContext, event_queue: EventQueue) -> None:
@@ -108,23 +109,50 @@ def create_agent_card() -> AgentCard:
     )
 
 
-def initialize_rag_agent() -> RAGAgent:
+async def initialize_rag_agent() -> RAGAgent:
     """Initialize the RAG Agent"""
     logger.info("Initializing RAG Agent...")
-    agent = RAGAgent()
+    agent = await RAGAgent.create()
     logger.info("RAG Agent initialized successfully")
     return agent
 
 
+@asynccontextmanager
+async def lifespan(app):
+    """Lifespan context manager for async initialization and cleanup"""
+    global rag_agent
+
+    # Startup: Initialize the RAG agent
+    logger.info("Starting up RAG Agent...")
+    rag_agent = await initialize_rag_agent()
+
+    yield
+
+    # Shutdown: Clean up resources if needed
+    logger.info("Shutting down RAG Agent...")
+    rag_agent = None
+
+
 def create_app():
     """Create and configure the A2A Starlette application"""
-    # Initialize RAG agent
     global rag_agent
-    if rag_agent is None:
-        rag_agent = initialize_rag_agent()
 
-    # Create agent executor
-    agent_executor = RAGAgentExecutor(rag_agent)
+    # Create agent executor with None initially (will be set in lifespan)
+    # We need to use a wrapper to access the global rag_agent
+    class LazyAgentExecutor(AgentExecutor):
+        async def execute(self, context: RequestContext, event_queue: EventQueue) -> None:
+            if rag_agent is None:
+                raise RuntimeError("RAG agent not initialized")
+            executor = RAGAgentExecutor(rag_agent)
+            await executor.execute(context, event_queue)
+
+        async def cancel(self, context: RequestContext, event_queue: EventQueue) -> None:
+            if rag_agent is None:
+                raise RuntimeError("RAG agent not initialized")
+            executor = RAGAgentExecutor(rag_agent)
+            await executor.cancel(context, event_queue)
+
+    agent_executor = LazyAgentExecutor()
 
     # Create task store
     task_store = InMemoryTaskStore()
@@ -138,14 +166,17 @@ def create_app():
     # Create agent card
     agent_card = create_agent_card()
 
-    # Create A2A Starlette application
+    # Create A2A Starlette application with lifespan
     a2a_app = A2AStarletteApplication(
         agent_card=agent_card,
         http_handler=http_handler,
     )
 
-    # Build and return the Starlette app
-    return a2a_app.build()
+    # Build and return the Starlette app with lifespan
+    app = a2a_app.build()
+    app.router.lifespan_context = lifespan
+
+    return app
 
 
 def run_server(host: str = "0.0.0.0", port: int = 8101):
@@ -156,4 +187,11 @@ def run_server(host: str = "0.0.0.0", port: int = 8101):
 
 
 if __name__ == "__main__":
+    # 로깅 설정
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    )
+
+    # 서버 실행
     run_server()

@@ -7,11 +7,15 @@ from langchain_openai import ChatOpenAI
 from langchain_core.messages import HumanMessage, SystemMessage, ToolMessage
 from langgraph.graph import StateGraph, END
 
-from mcp_custom.tools.mcp_tools import (
+from src.mcp_custom.tools.mcp_tools import (
     search_knowledge_base,
     rag_query_tool,
     get_rag_stats_tool,
 )
+
+from dotenv import load_dotenv
+
+load_dotenv()
 
 logger = logging.getLogger(__name__)
 
@@ -29,7 +33,7 @@ class RAGAgent:
     """RAG Agent for knowledge base queries using LangGraph"""
 
     def __init__(self):
-        """Initialize the RAG Agent"""
+        """Initialize the RAG Agent (synchronous part)"""
         self.llm = ChatOpenAI(
             model="gpt-4o-mini", temperature=0, api_key=os.getenv("OPENAI_API_KEY")
         )
@@ -48,6 +52,13 @@ class RAGAgent:
         self.graph = self._build_graph()
 
         logger.info("RAG Agent initialized")
+
+    @classmethod
+    async def create(cls):
+        """Factory method to create and fully initialize RAGAgent"""
+        instance = cls()
+        logger.info("RAG Agent fully initialized")
+        return instance
 
     def _build_graph(self) -> StateGraph:
         """Build LangGraph workflow"""
@@ -222,31 +233,3 @@ Keep your response focused and professional."""
             "rag_result": final_state.get("rag_result"),
             "message_count": len(final_state["messages"]),
         }
-
-    def get_capabilities(self) -> List[str]:
-        """Return list of agent capabilities"""
-        return [
-            "knowledge_base_search",
-            "document_retrieval",
-            "rag_query",
-            "kb_statistics",
-            "semantic_search",
-        ]
-
-
-# Example usage
-if __name__ == "__main__":
-    import asyncio
-
-    async def main():
-        agent = RAGAgent()
-
-        # Test request
-        result = await agent.process_request(
-            "What are the key principles of portfolio diversification?"
-        )
-
-        print("Agent Response:")
-        print(result["response"])
-
-    asyncio.run(main())
