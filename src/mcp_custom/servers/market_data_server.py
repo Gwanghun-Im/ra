@@ -1,10 +1,19 @@
 """MCP Server for Market Data"""
 
+import os
 import asyncio
+from datetime import datetime
 from typing import Any, Dict, List
-from datetime import datetime, timedelta
+import yfinance as yf
+import requests
 import random
 from fastmcp import FastMCP
+from dotenv import load_dotenv
+
+load_dotenv()
+
+# FRED API 키 (https://fred.stlouisfed.org/api/api_key.html 에서 발급)
+FRED_API_KEY = os.getenv("FRED_API_KEY", "YOUR_FRED_API_KEY_HERE")
 
 # Initialize MCP server
 mcp = FastMCP("Market Data Server")
@@ -47,44 +56,6 @@ async def get_stock_price(symbol: str) -> Dict[str, Any]:
         "timestamp": datetime.now().isoformat(),
         "currency": "USD",
     }
-
-
-@mcp.tool()
-async def get_market_news(symbol: str | None = None, limit: int = 5) -> List[Dict[str, Any]]:
-    """
-    Get market news articles
-
-    Args:
-        symbol: Optional stock symbol to filter news
-        limit: Maximum number of articles to return
-
-    Returns:
-        List of news articles with title, summary, and source
-    """
-    await asyncio.sleep(0.3)
-
-    # Mock news data
-    news_templates = [
-        "Strong earnings beat expectations",
-        "Market volatility continues amid economic uncertainty",
-        "Analysts upgrade rating to Buy",
-        "New product launch expected to boost revenue",
-        "Regulatory concerns weigh on stock performance",
-    ]
-
-    news = []
-    for i in range(limit):
-        article = {
-            "title": f"{symbol or 'Market'}: {random.choice(news_templates)}",
-            "summary": f"Detailed analysis of recent developments affecting {symbol or 'the market'}. "
-            f"Experts predict {'positive' if random.random() > 0.5 else 'cautious'} outlook.",
-            "source": random.choice(["Bloomberg", "Reuters", "CNBC", "WSJ"]),
-            "published_at": (datetime.now() - timedelta(hours=random.randint(1, 24))).isoformat(),
-            "sentiment": random.choice(["positive", "neutral", "negative"]),
-        }
-        news.append(article)
-
-    return news
 
 
 @mcp.tool()
@@ -152,6 +123,36 @@ async def search_stocks(query: str, limit: int = 10) -> List[Dict[str, Any]]:
     return results[:limit]
 
 
+@mcp.tool(
+    name="get_market_indicators",
+    description="여러 마켓 지표를 한 번에 조회합니다.",
+)
+def get_market_indicators(indicators: list[str]) -> dict:
+    """실시간 마켓 지표를 반환합니다."""
+    result = {}
+    mapping = {
+        "vix": fetch_vix,
+        "treasury_10y": fetch_treasury_10y,
+        "usd_krw": fetch_usd_krw,
+        "gold": fetch_gold,
+        "crude_oil": fetch_crude_oil,
+        "unemployment_rate": fetch_unemployment_rate,
+        "gdp_growth": fetch_gdp_growth,
+    }
+
+    for ind in indicators:
+        func = mapping.get(ind)
+        if not func:
+            result[ind] = {"error": "unknown indicator"}
+            continue
+        try:
+            result[ind] = func()
+        except Exception as e:
+            result[ind] = {"error": str(e)}
+
+    return {"timestamp": datetime.utcnow().isoformat() + "Z", "data": result}
+
+
 @mcp.resource("market://status")
 async def market_status() -> str:
     """Get current market status"""
@@ -165,6 +166,51 @@ async def market_status() -> str:
         status = "CLOSED"
 
     return f"Market Status: {status} at {now.strftime('%Y-%m-%d %H:%M:%S')}"
+
+
+# ------------------------------------------------------------
+# 실제 데이터 가져오는 함수들
+# ------------------------------------------------------------
+def fetch_vix() -> float:
+    return yf.Ticker("^VIX").history(period="1d")["Close"].iloc[-1]
+
+
+def fetch_treasury_10y() -> float:
+    return yf.Ticker("^TNX").history(period="1d")["Close"].iloc[-1]
+
+
+def fetch_usd_krw() -> float:
+    return yf.Ticker("KRW=X").history(period="1d")["Close"].iloc[-1]
+
+
+def fetch_gold() -> float:
+    return yf.Ticker("GC=F").history(period="1d")["Close"].iloc[-1]
+
+
+def fetch_crude_oil() -> float:
+    return yf.Ticker("CL=F").history(period="1d")["Close"].iloc[-1]
+
+
+def fetch_fred(series_id: str) -> float:
+    url = "https://api.stlouisfed.org/fred/series/observations"
+    params = {
+        "series_id": series_id,
+        "api_key": FRED_API_KEY,
+        "file_type": "json",
+        "sort_order": "desc",
+        "limit": 1,
+    }
+    resp = requests.get(url, params=params).json()
+    value = resp["observations"][0]["value"]
+    return float(value) if value != "." else None
+
+
+def fetch_unemployment_rate() -> float:
+    return fetch_fred("UNRATE")  # 미국 실업률
+
+
+def fetch_gdp_growth() -> float:
+    return fetch_fred("A191RL1Q225SBEA")  # 전분기 대비 GDP 성장률
 
 
 # Run the server
@@ -191,9 +237,9 @@ if __name__ == "__main__":
             # The @mcp.tool() decorator registers these, but we can still call them directly
             tool_functions = {
                 "get_stock_price": get_stock_price,
-                "get_market_news": get_market_news,
                 "get_company_financials": get_company_financials,
                 "search_stocks": search_stocks,
+                "get_market_indicators": get_market_indicators,
             }
 
             if request.name not in tool_functions:
@@ -206,7 +252,7 @@ if __name__ == "__main__":
             # The @mcp.tool() decorator wraps functions in FunctionTool objects
             # Access the underlying function via .fn attribute
             tool_obj = tool_functions[request.name]
-            if hasattr(tool_obj, 'fn'):
+            if hasattr(tool_obj, "fn"):
                 # It's a FunctionTool, get the underlying async function
                 result = await tool_obj.fn(**request.arguments)
             else:
@@ -215,6 +261,7 @@ if __name__ == "__main__":
 
             # Return result in consistent format
             import json
+
             return {"content": [{"type": "text", "text": json.dumps(result)}]}
         except HTTPException:
             raise

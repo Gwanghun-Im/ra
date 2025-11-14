@@ -63,6 +63,31 @@ async def get_stock_price_tool(symbol: str) -> Dict[str, Any]:
 
 
 @tool
+async def get_market_indicators_tool(indicators: list[str]) -> Dict[str, Any]:
+    """
+    Get market indicators
+
+    Args:
+        indicators: List of indicator names to retrieve  (e.g., ["vix", "gold"])
+            Supported indicators:
+                - vix, treasury_10y, usd_krw, gold, crude_oil, unemployment_rate, gdp_growth
+
+
+
+    Returns:
+        Dictionary with requested market indicators
+            Supported indicators:
+                - vix, treasury_10y, usd_krw, gold, crude_oil, unemployment_rate, gdp_growth
+    """
+    result = await call_mcp_tool(MARKET_DATA_URL, "get_market_indicators", indicators)
+    # Parse JSON string if needed
+    if isinstance(result, str):
+
+        return json.loads(result)
+    return result
+
+
+@tool
 async def get_market_news_tool(symbol: str | None = None, limit: int = 5) -> List[Dict[str, Any]]:
     """
     Get market news articles

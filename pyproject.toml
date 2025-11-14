@@ -25,6 +25,7 @@ dependencies = [
     "pandas>=2.2.0",
     "langchain-mcp-adapters>=0.1.12",
     "tavily>=1.1.0",
+    "yfinance>=0.2.66",
 ]
 
 [project.optional-dependencies]

@@ -9,6 +9,7 @@ from langgraph.graph import StateGraph, END
 
 from src.mcp_custom.tools.mcp_tools import (
     get_stock_price_tool,
+    get_market_indicators_tool,
     get_company_financials_tool,
     get_portfolio_tool,
     calculate_returns_tool,
@@ -51,6 +52,7 @@ class RoboAdvisorAgent:
         # Define available tools (RAG tools removed, now using A2A)
         self.tools = [
             get_stock_price_tool,
+            get_market_indicators_tool,
             get_company_financials_tool,
             get_portfolio_tool,
             calculate_returns_tool,
@@ -120,6 +122,7 @@ Always:
 
 Available tools:
 - search_tavily: Get market news and sentiment
+- get_market_indicators: Get key market indicators
 - get_stock_price: Get current stock prices
 - get_company_financials: Get company financial metrics
 - get_portfolio: Retrieve user portfolio

@@ -8,7 +8,8 @@ RUN pip install --no-cache-dir \
     httpx \
     python-dotenv \
     fastapi>=0.115.0 \
-    uvicorn>=0.30.0
+    uvicorn>=0.30.0 \
+    yfinance
 
 # Copy server file
 COPY src/mcp_custom/servers/market_data_server.py /app/server.py
